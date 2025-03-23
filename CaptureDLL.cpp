@@ -9,8 +9,10 @@
 #include <mutex>
 #include <iostream>
 #include <chrono>
-#include <iostream>
+#include <timeapi.h>
+#include <windows.h>
 
+#pragma comment(lib, "winmm.lib") // 📌 winmm 라이브러리 링크 추가
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
@@ -38,6 +40,12 @@ std::vector<unsigned char> frameBuffer(frameWidth* frameHeight * 4, 0);
 extern "C" __declspec(dllexport) const char* TestDLL() {
 	return "DLL is successfully loaded!";
 }
+
+// 정밀한 타이머 설정 (Windows 전용)
+void SetHighPrecisionTimer() {
+	timeBeginPeriod(1); // Windows 타이머 해상도를 1ms로 설정 (더 정확한 타이밍 가능)
+}
+
 
 // DirectX 11 초기화 함수
 bool InitializeCapture() {
@@ -82,6 +90,8 @@ bool InitializeCapture() {
 void CaptureLoop(void (*frameCallback)(unsigned char* data, int width, int height)) {
 	HRESULT hr;
 	try {
+		SetHighPrecisionTimer();
+
 		while (capturing) {
 			ComPtr<IDXGIResource> desktopResource;
 			DXGI_OUTDUPL_FRAME_INFO frameInfo;
@@ -146,15 +156,15 @@ void CaptureLoop(void (*frameCallback)(unsigned char* data, int width, int heigh
 			frameCallback(frameBuffer.data(), frameWidth, frameHeight);
 
 
-			// FPS 제한 (프레임 간격 유지)
-			auto endTime = std::chrono::high_resolution_clock::now();
-			auto elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-			int sleepTime = frameTime - static_cast<int>(elapsedTime);
-
-			if (sleepTime > 0) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
+			while (true) {
+				auto now = std::chrono::high_resolution_clock::now();
+				double elapsedTime = std::chrono::duration<double, std::milli>(now - startTime).count();
+				if (elapsedTime >= frameTime) {
+					break; // 목표 시간 도달 시 다음 프레임 진행
+				}
 			}
 		}
+		timeEndPeriod(1);
 	}
 	catch (std::exception& e) {
 		printf("e");
