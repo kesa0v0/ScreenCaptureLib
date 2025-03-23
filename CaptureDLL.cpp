@@ -1,4 +1,4 @@
-#include "pch.h"
+ï»¿#include "pch.h"
 #include "CaptureDLL.h"
 #include <windows.graphics.capture.h>
 #include <d3d11.h>
@@ -8,160 +8,180 @@
 #include <vector>
 #include <mutex>
 #include <iostream>
+#include <chrono>
+#include <iostream>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
 using namespace Microsoft::WRL;
 
-// Àü¿ª º¯¼ö
+
+// ì „ì—­ ë³€ìˆ˜
 bool capturing = false;
 std::thread captureThread;
 std::mutex captureMutex;
 
-// DirectX º¯¼ö
+// DirectX ë³€ìˆ˜
 ComPtr<ID3D11Device> d3dDevice;
 ComPtr<ID3D11DeviceContext> d3dContext;
 ComPtr<IDXGIOutputDuplication> desktopDuplication;
 
-// ÇØ»óµµ ¹× ÇÁ·¹ÀÓ¹öÆÛ
+// í•´ìƒë„ ë° í”„ë ˆì„ë²„í¼
 int frameWidth = 1920;
 int frameHeight = 1080;
+int targetFPS = 60;
+int frameTime = 1000 / targetFPS;
 std::vector<unsigned char> frameBuffer(frameWidth* frameHeight * 4, 0);
 
-// DLL ·Îµå Å×½ºÆ® ÇÔ¼ö
+// DLL ë¡œë“œ í…ŒìŠ¤íŠ¸ í•¨ìˆ˜
 extern "C" __declspec(dllexport) const char* TestDLL() {
-    return "DLL is successfully loaded!";
+	return "DLL is successfully loaded!";
 }
 
-// DirectX 11 ÃÊ±âÈ­ ÇÔ¼ö
+// DirectX 11 ì´ˆê¸°í™” í•¨ìˆ˜
 bool InitializeCapture() {
-    HRESULT hr;
+	HRESULT hr;
 
-    // DirectX 11 ÀåÄ¡ »ı¼º
-    D3D_FEATURE_LEVEL featureLevel;
-    hr = D3D11CreateDevice(
-        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        nullptr, 0, D3D11_SDK_VERSION, &d3dDevice, &featureLevel, &d3dContext
-    );
+	// DirectX 11 ì¥ì¹˜ ìƒì„±
+	D3D_FEATURE_LEVEL featureLevel;
+	hr = D3D11CreateDevice(
+		nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+		nullptr, 0, D3D11_SDK_VERSION, &d3dDevice, &featureLevel, &d3dContext
+	);
 
-    if (FAILED(hr)) {
-        std::cerr << "Failed to create D3D11 device\n";
-        return false;
-    }
-
-    // DXGI Factory ¹× ¾î´ğÅÍ °¡Á®¿À±â
-    ComPtr<IDXGIDevice> dxgiDevice;
-    d3dDevice.As(&dxgiDevice);
-
-    ComPtr<IDXGIAdapter> adapter;
-    dxgiDevice->GetAdapter(&adapter);
-
-    ComPtr<IDXGIOutput> output;
-    adapter->EnumOutputs(0, &output);
-
-    ComPtr<IDXGIOutput1> output1;
-    output.As(&output1);
-
-    // Output Duplication ÃÊ±âÈ­
-    hr = output1->DuplicateOutput(d3dDevice.Get(), &desktopDuplication);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to initialize output duplication\n";
-        return false;
-    }
-
-    return true;
-}
-
-// Ä¸Ã³ ·çÇÁ
-void CaptureLoop(void (*frameCallback)(unsigned char* data, int width, int height)) {
-    HRESULT hr;
-    try {
-
-    while (capturing) {
-        ComPtr<IDXGIResource> desktopResource;
-        DXGI_OUTDUPL_FRAME_INFO frameInfo;
-        ComPtr<ID3D11Texture2D> acquiredTexture;
-
-        // »õ ÇÁ·¹ÀÓ °¡Á®¿À±â
-        hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
-        if (FAILED(hr)) {
-            std::cerr << "Failed to acquire frame\n";
-            continue;
-        }
-
-        // 2D ÅØ½ºÃ³ °¡Á®¿À±â
-        desktopResource.As(&acquiredTexture);
-
-        // CPU Á¢±Ù °¡´ÉÇÑ ÅØ½ºÃ³ »ı¼º
-        D3D11_TEXTURE2D_DESC textureDesc;
-        acquiredTexture->GetDesc(&textureDesc);
-        textureDesc.Usage = D3D11_USAGE_STAGING;
-        textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        textureDesc.BindFlags = 0;
-        textureDesc.MiscFlags = 0;
-
-        ComPtr<ID3D11Texture2D> cpuTexture;
-        hr = d3dDevice->CreateTexture2D(&textureDesc, nullptr, &cpuTexture);
-        if (FAILED(hr)) {
-            std::cerr << "Failed to create staging texture\n";
-            desktopDuplication->ReleaseFrame();
-            continue;
-        }
-
-        // GPU -> CPU º¹»ç
-        d3dContext->CopyResource(cpuTexture.Get(), acquiredTexture.Get());
-
-        // ¸ÊÇÎÇÏ¿© µ¥ÀÌÅÍ °¡Á®¿À±â
-        D3D11_MAPPED_SUBRESOURCE mappedResource;
-        hr = d3dContext->Map(cpuTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
-        if (FAILED(hr)) {
-            std::cerr << "Failed to map texture\n";
-            desktopDuplication->ReleaseFrame();
-            continue;
-        }
-
-        // µ¥ÀÌÅÍ¸¦ frameBuffer·Î º¹»ç
-        unsigned char* srcData = static_cast<unsigned char*>(mappedResource.pData);
-        int rowPitch = mappedResource.RowPitch;
-
-        for (int y = 0; y < frameHeight; ++y) {
-            memcpy(&frameBuffer[y * frameWidth * 4], &srcData[y * rowPitch], frameWidth * 4);
-        }
-
-        d3dContext->Unmap(cpuTexture.Get(), 0);
-        desktopDuplication->ReleaseFrame();
-
-        // Äİ¹é È£Ãâ (ÇÁ·¹ÀÓ µ¥ÀÌÅÍ Àü´Ş)
-        frameCallback(frameBuffer.data(), frameWidth, frameHeight);
-    }
+	if (FAILED(hr)) {
+		std::cerr << "Failed to create D3D11 device\n";
+		return false;
 	}
-    catch (std::exception& e) {
-        printf("e");
-    }
+
+	// DXGI Factory ë° ì–´ëŒ‘í„° ê°€ì ¸ì˜¤ê¸°
+	ComPtr<IDXGIDevice> dxgiDevice;
+	d3dDevice.As(&dxgiDevice);
+
+	ComPtr<IDXGIAdapter> adapter;
+	dxgiDevice->GetAdapter(&adapter);
+
+	ComPtr<IDXGIOutput> output;
+	adapter->EnumOutputs(0, &output);
+
+	ComPtr<IDXGIOutput1> output1;
+	output.As(&output1);
+
+	// Output Duplication ì´ˆê¸°í™”
+	hr = output1->DuplicateOutput(d3dDevice.Get(), &desktopDuplication);
+	if (FAILED(hr)) {
+		std::cerr << "Failed to initialize output duplication\n";
+		return false;
+	}
+
+	return true;
 }
 
-// Ä¸Ã³ ½ÃÀÛ
+// ìº¡ì²˜ ë£¨í”„
+void CaptureLoop(void (*frameCallback)(unsigned char* data, int width, int height)) {
+	HRESULT hr;
+	try {
+		while (capturing) {
+			ComPtr<IDXGIResource> desktopResource;
+			DXGI_OUTDUPL_FRAME_INFO frameInfo;
+			ComPtr<ID3D11Texture2D> acquiredTexture;
+
+			auto startTime = std::chrono::high_resolution_clock::now();
+			long long timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(startTime.time_since_epoch()).count();
+
+			// ìƒˆ í”„ë ˆì„ ê°€ì ¸ì˜¤ê¸°
+			hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
+			if (FAILED(hr)) {
+				std::cerr << "Failed to acquire frame\n";
+				continue;
+			}
+
+			// 2D í…ìŠ¤ì²˜ ê°€ì ¸ì˜¤ê¸°
+			desktopResource.As(&acquiredTexture);
+
+			// CPU ì ‘ê·¼ ê°€ëŠ¥í•œ í…ìŠ¤ì²˜ ìƒì„±
+			D3D11_TEXTURE2D_DESC textureDesc;
+			acquiredTexture->GetDesc(&textureDesc);
+			textureDesc.Usage = D3D11_USAGE_STAGING;
+			textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			textureDesc.BindFlags = 0;
+			textureDesc.MiscFlags = 0;
+
+			ComPtr<ID3D11Texture2D> cpuTexture;
+			hr = d3dDevice->CreateTexture2D(&textureDesc, nullptr, &cpuTexture);
+			if (FAILED(hr)) {
+				std::cerr << "Failed to create staging texture\n";
+				desktopDuplication->ReleaseFrame();
+				continue;
+			}
+
+			// GPU -> CPU ë³µì‚¬
+			d3dContext->CopyResource(cpuTexture.Get(), acquiredTexture.Get());
+
+			// ë§µí•‘í•˜ì—¬ ë°ì´í„° ê°€ì ¸ì˜¤ê¸°
+			D3D11_MAPPED_SUBRESOURCE mappedResource;
+			hr = d3dContext->Map(cpuTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
+			if (FAILED(hr)) {
+				std::cerr << "Failed to map texture\n";
+				desktopDuplication->ReleaseFrame();
+				continue;
+			}
+
+			// ë°ì´í„°ë¥¼ frameBufferë¡œ ë³µì‚¬
+			unsigned char* srcData = static_cast<unsigned char*>(mappedResource.pData);
+			int rowPitch = mappedResource.RowPitch;
+
+			for (int y = 0; y < frameHeight; ++y) {
+				memcpy(&frameBuffer[y * frameWidth * 4], &srcData[y * rowPitch], frameWidth * 4);
+			}
+
+			d3dContext->Unmap(cpuTexture.Get(), 0);
+			desktopDuplication->ReleaseFrame();
+
+			// ì²« 8ë°”ì´íŠ¸ì— íƒ€ì„ìŠ¤íƒ¬í”„ ì¶”ê°€
+			memcpy(frameBuffer.data(), &timestamp, sizeof(timestamp));
+
+			// ì½œë°± í˜¸ì¶œ (í”„ë ˆì„ ë°ì´í„° ì „ë‹¬)
+			frameCallback(frameBuffer.data(), frameWidth, frameHeight);
+
+
+			// FPS ì œí•œ (í”„ë ˆì„ ê°„ê²© ìœ ì§€)
+			auto endTime = std::chrono::high_resolution_clock::now();
+			auto elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+			int sleepTime = frameTime - static_cast<int>(elapsedTime);
+
+			if (sleepTime > 0) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
+			}
+		}
+	}
+	catch (std::exception& e) {
+		printf("e");
+	}
+}
+
+// ìº¡ì²˜ ì‹œì‘
 extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(unsigned char* data, int width, int height)) {
-    std::lock_guard<std::mutex> lock(captureMutex);
-    if (!capturing) {
-        if (!InitializeCapture()) {
-            std::cerr << "Capture initialization failed!\n";
-            return;
-        }
+	std::lock_guard<std::mutex> lock(captureMutex);
+	if (!capturing) {
+		if (!InitializeCapture()) {
+			std::cerr << "Capture initialization failed!\n";
+			return;
+		}
 
-        capturing = true;
-        captureThread = std::thread(CaptureLoop, frameCallback);
-    }
+		capturing = true;
+		captureThread = std::thread(CaptureLoop, frameCallback);
+	}
 }
 
-// Ä¸Ã³ ÁßÁö
+// ìº¡ì²˜ ì¤‘ì§€
 extern "C" __declspec(dllexport) void StopCapture() {
-    {
-        std::lock_guard<std::mutex> lock(captureMutex);
-        capturing = false;
-    }
-    if (captureThread.joinable()) {
-        captureThread.join();
-    }
+	{
+		std::lock_guard<std::mutex> lock(captureMutex);
+		capturing = false;
+	}
+	if (captureThread.joinable()) {
+		captureThread.join();
+	}
 }
