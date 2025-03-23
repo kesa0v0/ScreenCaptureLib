@@ -99,7 +99,6 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			ComPtr<ID3D11Texture2D> acquiredTexture;
 
 			auto startTime = std::chrono::high_resolution_clock::now();
-			long long timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(startTime.time_since_epoch()).count();
 
 			// 새 프레임 가져오기
 			hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
@@ -150,14 +149,17 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			d3dContext->Unmap(cpuTexture.Get(), 0);
 			desktopDuplication->ReleaseFrame();
 
-			// 첫 8바이트에 타임스탬프 추가
-			memcpy(frameBuffer.data(), &timestamp, sizeof(timestamp));
 
 			// 콜백용 프레임 데이터 생성
 			FrameData frameData;
 			frameData.data = frameBuffer.data();
 			frameData.width = frameWidth;
 			frameData.height = frameHeight;
+
+			auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(startTime.time_since_epoch()).count();
+
+			std::cout << "N: " << startTime.time_since_epoch() << std::endl;
+			frameData.timeStamp = timestamp;
 
 			// 콜백 호출 (프레임 데이터 전달)
 			frameCallback(frameData);

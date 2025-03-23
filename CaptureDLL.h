@@ -6,6 +6,7 @@ struct FrameData {
     unsigned char* data;
     int width;
     int height;
+    long long timeStamp;
 };
 
 extern "C" {
