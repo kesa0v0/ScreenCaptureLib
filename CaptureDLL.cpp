@@ -36,6 +36,7 @@ int targetFPS = 60;
 int frameTime = 1000 / targetFPS;
 std::vector<unsigned char> frameBuffer(frameWidth* frameHeight * 4, 0);
 
+
 // DLL 로드 테스트 함수
 extern "C" __declspec(dllexport) const char* TestDLL() {
 	return "DLL is successfully loaded!";
@@ -87,7 +88,7 @@ bool InitializeCapture() {
 }
 
 // 캡처 루프
-void CaptureLoop(void (*frameCallback)(unsigned char* data, int width, int height)) {
+void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 	HRESULT hr;
 	try {
 		SetHighPrecisionTimer();
@@ -152,8 +153,14 @@ void CaptureLoop(void (*frameCallback)(unsigned char* data, int width, int heigh
 			// 첫 8바이트에 타임스탬프 추가
 			memcpy(frameBuffer.data(), &timestamp, sizeof(timestamp));
 
+			// 콜백용 프레임 데이터 생성
+			FrameData frameData;
+			frameData.data = frameBuffer.data();
+			frameData.width = frameWidth;
+			frameData.height = frameHeight;
+
 			// 콜백 호출 (프레임 데이터 전달)
-			frameCallback(frameBuffer.data(), frameWidth, frameHeight);
+			frameCallback(frameData);
 
 
 			while (true) {
@@ -172,7 +179,7 @@ void CaptureLoop(void (*frameCallback)(unsigned char* data, int width, int heigh
 }
 
 // 캡처 시작
-extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(unsigned char* data, int width, int height)) {
+extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameData frameData)) {
 	std::lock_guard<std::mutex> lock(captureMutex);
 	if (!capturing) {
 		if (!InitializeCapture()) {
