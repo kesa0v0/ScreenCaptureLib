@@ -1,5 +1,6 @@
 ﻿#include "pch.h"
 #include "CaptureDLL.h"
+#include "lz4.h"
 #include <windows.graphics.capture.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -11,6 +12,8 @@
 #include <chrono>
 #include <timeapi.h>
 #include <windows.h>
+#include <cstring>
+
 
 #pragma comment(lib, "winmm.lib") // 📌 winmm 라이브러리 링크 추가
 #pragma comment(lib, "d3d11.lib")
@@ -108,7 +111,7 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 				std::cerr << "Access lost\n";
 				continue;	
 			case DXGI_ERROR_WAIT_TIMEOUT:
-				std::cerr << "Timeout\n";
+				// 보통 전 프레임을 계속 사용하는 경우 발생
 				continue;
 			case DXGI_ERROR_INVALID_CALL:
 				std::cerr << "Invalid call\n";
@@ -188,6 +191,40 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 		printf("e");
 	}
 }
+
+void CompareFrames(const std::vector<unsigned char>& prevFrame, const std::vector<unsigned char>& currFrame, std::vector<unsigned char>& diffFrame) {
+	const int frameSize = prevFrame.size();
+	diffFrame.clear();
+
+	for (int i = 0; i < frameSize; i++) {
+		if (prevFrame[i] != currFrame[i]) {
+			diffFrame.push_back(currFrame[i]);
+		}
+		else {
+			diffFrame.push_back(0); // 변경이 없는 부분은 0으로 표시
+		}
+	}
+}
+
+void CompressDeltaFrame(const std::vector<unsigned char>& deltaFrame, std::vector<char>& compressedFrame) {
+	int maxCompressedSize = LZ4_compressBound(deltaFrame.size());
+	compressedFrame.resize(maxCompressedSize);
+
+	int compressedSize = LZ4_compress_default(
+		reinterpret_cast<const char*>(deltaFrame.data()),
+		compressedFrame.data(),
+		deltaFrame.size(),
+		maxCompressedSize
+	);
+
+	if (compressedSize <= 0) {
+		std::cerr << "Compression failed!" << std::endl;
+		return;
+	}
+
+	compressedFrame.resize(compressedSize); // 실제 크기로 조정
+}
+
 
 // 캡처 시작
 extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameData frameData)) {
