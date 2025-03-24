@@ -103,7 +103,19 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 
 			// 새 프레임 가져오기
 			hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
-			if (FAILED(hr)) {
+			switch (hr) {
+			case DXGI_ERROR_ACCESS_LOST:
+				std::cerr << "Access lost\n";
+				continue;	
+			case DXGI_ERROR_WAIT_TIMEOUT:
+				std::cerr << "Timeout\n";
+				continue;
+			case DXGI_ERROR_INVALID_CALL:
+				std::cerr << "Invalid call\n";
+				continue;
+			case S_OK:
+				break;
+			default:
 				std::cerr << "Failed to acquire frame\n";
 				continue;
 			}
