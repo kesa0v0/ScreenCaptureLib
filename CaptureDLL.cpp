@@ -102,7 +102,7 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 			// 새 프레임 가져오기
-			hr = desktopDuplication->AcquireNextFrame(33, &frameInfo, &desktopResource);
+			hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
 			if (FAILED(hr)) {
 				std::cerr << "Failed to acquire frame\n";
 				continue;
