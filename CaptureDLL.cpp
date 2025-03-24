@@ -33,7 +33,7 @@ ComPtr<IDXGIOutputDuplication> desktopDuplication;
 int frameWidth = 1920;
 int frameHeight = 1080;
 int targetFPS = 60;
-int frameTime = 1000 / targetFPS;
+double frameTime = 1000 / targetFPS;
 std::vector<unsigned char> frameBuffer(frameWidth* frameHeight * 4, 0);
 
 
@@ -99,9 +99,10 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			ComPtr<ID3D11Texture2D> acquiredTexture;
 
 			auto startTime = std::chrono::high_resolution_clock::now();
+			auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 			// 새 프레임 가져오기
-			hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
+			hr = desktopDuplication->AcquireNextFrame(33, &frameInfo, &desktopResource);
 			if (FAILED(hr)) {
 				std::cerr << "Failed to acquire frame\n";
 				continue;
@@ -155,11 +156,7 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			frameData.data = frameBuffer.data();
 			frameData.width = frameWidth;
 			frameData.height = frameHeight;
-
-			auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(startTime.time_since_epoch()).count();
-
-			std::cout << "N: " << startTime.time_since_epoch() << std::endl;
-			frameData.timeStamp = timestamp;
+			frameData.timeStamp = startEpochTime;
 
 			// 콜백 호출 (프레임 데이터 전달)
 			frameCallback(frameData);
