@@ -45,11 +45,6 @@ extern "C" __declspec(dllexport) const char* TestDLL() {
 	return "DLL is successfully loaded!";
 }
 
-// 정밀한 타이머 설정 (Windows 전용)
-void SetHighPrecisionTimer() {
-	timeBeginPeriod(1); // Windows 타이머 해상도를 1ms로 설정 (더 정확한 타이밍 가능)
-}
-
 
 // DirectX 11 초기화 함수
 bool InitializeCapture() {
@@ -90,140 +85,134 @@ bool InitializeCapture() {
 	return true;
 }
 
-// 캡처 루프
+
+// 새 프레임 캡처
+bool AcquireFrame(ComPtr<ID3D11Texture2D>& acquiredTexture) {
+    ComPtr<IDXGIResource> desktopResource;
+    DXGI_OUTDUPL_FRAME_INFO frameInfo;
+
+    HRESULT hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
+    if (hr != S_OK) {
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) return false;
+        if (hr == DXGI_ERROR_ACCESS_LOST) {
+            std::cerr << "Access lost\n";
+            return false;
+        }
+        std::cerr << "Failed to acquire frame\n";
+        return false;
+    }
+
+    desktopResource.As(&acquiredTexture);
+    return true;
+}
+
+// CPU 텍스처 생성 및 데이터 복사
+bool MapFrameToCPU(ComPtr<ID3D11Texture2D>& acquiredTexture, std::vector<unsigned char>& frameBuffer) {
+    D3D11_TEXTURE2D_DESC textureDesc;
+    acquiredTexture->GetDesc(&textureDesc);
+    textureDesc.Usage = D3D11_USAGE_STAGING;
+    textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    textureDesc.BindFlags = 0;
+
+    ComPtr<ID3D11Texture2D> cpuTexture;
+    HRESULT hr = d3dDevice->CreateTexture2D(&textureDesc, nullptr, &cpuTexture);
+    if (FAILED(hr)) {
+        std::cerr << "Failed to create staging texture\n";
+        return false;
+    }
+
+    d3dContext->CopyResource(cpuTexture.Get(), acquiredTexture.Get());
+
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    hr = d3dContext->Map(cpuTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
+    if (FAILED(hr)) {
+        std::cerr << "Failed to map texture\n";
+        return false;
+    }
+
+    unsigned char* srcData = static_cast<unsigned char*>(mappedResource.pData);
+    int rowPitch = mappedResource.RowPitch;
+
+    for (int y = 0; y < frameHeight; ++y) {
+        memcpy(&frameBuffer[y * frameWidth * 4], &srcData[y * rowPitch], frameWidth * 4);
+    }
+
+    d3dContext->Unmap(cpuTexture.Get(), 0);
+    return true;
+}
+
+// LZ4 압축 수행
+int CompressFrame(const std::vector<unsigned char>& frameBuffer, std::vector<unsigned char>& compressedBuffer) {
+    int compressedSize = LZ4_compress_default(
+        reinterpret_cast<const char*>(frameBuffer.data()),       // 원본 데이터
+        reinterpret_cast<char*>(compressedBuffer.data()),        // 압축 버퍼
+        frameWidth * frameHeight * 4,                           // 원본 크기
+        LZ4_compressBound(frameWidth * frameHeight * 4));       // 최대 압축 크기
+
+    if (compressedSize <= 0) {
+        std::cerr << "Compression failed\n";
+        return -1;
+    }
+
+    return compressedSize;
+}
+
+// 메인 캡처 루프
 void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
-	HRESULT hr;
-	try {
-		SetHighPrecisionTimer();
+    try {
+        InitializeCapture();
 
-		while (capturing) {
-			ComPtr<IDXGIResource> desktopResource;
-			DXGI_OUTDUPL_FRAME_INFO frameInfo;
-			ComPtr<ID3D11Texture2D> acquiredTexture;
+        while (capturing) {
+            ComPtr<ID3D11Texture2D> acquiredTexture;
 
-			auto startTime = std::chrono::high_resolution_clock::now();
-			auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+			// 프레임 유지, 지연 시간 측정을 위한 타임스탬프
+            auto startTime = std::chrono::high_resolution_clock::now();
+            auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
 
-			// 새 프레임 가져오기
-			hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
-			switch (hr) {
-			case DXGI_ERROR_ACCESS_LOST:
-				std::cerr << "Access lost\n";
-				continue;	
-			case DXGI_ERROR_WAIT_TIMEOUT:
-				// 보통 전 프레임을 계속 사용하는 경우 발생
-				continue;
-			case DXGI_ERROR_INVALID_CALL:
-				std::cerr << "Invalid call\n";
-				continue;
-			case S_OK:
-				break;
-			default:
-				std::cerr << "Failed to acquire frame\n";
-				continue;
-			}
+            // 새 프레임 가져오기
+            if (!AcquireFrame(acquiredTexture)) {
+                continue;
+            }
 
-			// 2D 텍스처 가져오기
-			desktopResource.As(&acquiredTexture);
+            // 프레임 데이터를 CPU로 가져오기
+            if (!MapFrameToCPU(acquiredTexture, frameBuffer)) {
+                continue;
+            }
 
-			// CPU 접근 가능한 텍스처 생성
-			D3D11_TEXTURE2D_DESC textureDesc;
-			acquiredTexture->GetDesc(&textureDesc);
-			textureDesc.Usage = D3D11_USAGE_STAGING;
-			textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-			textureDesc.BindFlags = 0;
-			textureDesc.MiscFlags = 0;
+            // LZ4 압축 수행
+			std::vector<unsigned char> compressedBuffer(frameWidth * frameHeight * 4);
+            int compressedSize = CompressFrame(frameBuffer, compressedBuffer);
+            if (compressedSize <= 0) {
+                continue;
+            }
 
-			ComPtr<ID3D11Texture2D> cpuTexture;
-			hr = d3dDevice->CreateTexture2D(&textureDesc, nullptr, &cpuTexture);
-			if (FAILED(hr)) {
-				std::cerr << "Failed to create staging texture\n";
-				desktopDuplication->ReleaseFrame();
-				continue;
-			}
+            // 콜백 전달
+            FrameData frameData;
+			frameData.data = compressedBuffer;
+            frameData.size = compressedSize;
+            frameData.width = frameWidth;
+            frameData.height = frameHeight;
+            frameData.timeStamp = startEpochTime;
 
-			// GPU -> CPU 복사
-			d3dContext->CopyResource(cpuTexture.Get(), acquiredTexture.Get());
+            frameCallback(frameData);
 
-			// 맵핑하여 데이터 가져오기
-			D3D11_MAPPED_SUBRESOURCE mappedResource;
-			hr = d3dContext->Map(cpuTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
-			if (FAILED(hr)) {
-				std::cerr << "Failed to map texture\n";
-				desktopDuplication->ReleaseFrame();
-				continue;
-			}
-
-			// 데이터를 frameBuffer로 복사
-			unsigned char* srcData = static_cast<unsigned char*>(mappedResource.pData);
-			int rowPitch = mappedResource.RowPitch;
-
-			for (int y = 0; y < frameHeight; ++y) {
-				memcpy(&frameBuffer[y * frameWidth * 4], &srcData[y * rowPitch], frameWidth * 4);
-			}
-
-			d3dContext->Unmap(cpuTexture.Get(), 0);
-			desktopDuplication->ReleaseFrame();
-
-
-			// 콜백용 프레임 데이터 생성
-			FrameData frameData;
-			frameData.data = frameBuffer.data();
-			frameData.width = frameWidth;
-			frameData.height = frameHeight;
-			frameData.timeStamp = startEpochTime;
-
-			// 콜백 호출 (프레임 데이터 전달)
-			frameCallback(frameData);
-
-
-			while (true) {
-				auto now = std::chrono::high_resolution_clock::now();
-				double elapsedTime = std::chrono::duration<double, std::milli>(now - startTime).count();
-				if (elapsedTime >= frameTime) {
-					break; // 목표 시간 도달 시 다음 프레임 진행
-				}
-			}
-		}
-		timeEndPeriod(1);
-	}
-	catch (std::exception& e) {
-		printf("e");
-	}
+            // 프레임 주기를 유지
+            while (true) {
+                auto now = std::chrono::high_resolution_clock::now();
+                double elapsedTime = std::chrono::duration<double, std::milli>(now - startTime).count();
+                if (elapsedTime >= frameTime) {
+                    break;
+                }
+            }
+        }
+    }
+    catch (std::exception& e) {
+        printf("Exception: %s\n", e.what());
+    }
 }
 
-void CompareFrames(const std::vector<unsigned char>& prevFrame, const std::vector<unsigned char>& currFrame, std::vector<unsigned char>& diffFrame) {
-	const int frameSize = prevFrame.size();
-	diffFrame.clear();
-
-	for (int i = 0; i < frameSize; i++) {
-		if (prevFrame[i] != currFrame[i]) {
-			diffFrame.push_back(currFrame[i]);
-		}
-		else {
-			diffFrame.push_back(0); // 변경이 없는 부분은 0으로 표시
-		}
-	}
-}
-
-void CompressDeltaFrame(const std::vector<unsigned char>& deltaFrame, std::vector<char>& compressedFrame) {
-	int maxCompressedSize = LZ4_compressBound(deltaFrame.size());
-	compressedFrame.resize(maxCompressedSize);
-
-	int compressedSize = LZ4_compress_default(
-		reinterpret_cast<const char*>(deltaFrame.data()),
-		compressedFrame.data(),
-		deltaFrame.size(),
-		maxCompressedSize
-	);
-
-	if (compressedSize <= 0) {
-		std::cerr << "Compression failed!" << std::endl;
-		return;
-	}
-
-	compressedFrame.resize(compressedSize); // 실제 크기로 조정
-}
 
 
 // 캡처 시작

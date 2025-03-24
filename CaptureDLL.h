@@ -1,9 +1,11 @@
 // CaptureDLL.h
 #pragma once
 #define CAPTUREDLL_API __declspec(dllexport)
+#include <vector> 
 
 struct FrameData {
-    unsigned char* data;
+    std::vector<unsigned char> data;
+	int size;
     int width;
     int height;
     long long timeStamp;
