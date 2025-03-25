@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "CaptureDLL.h"
 #include "lz4.h"
 #include <windows.graphics.capture.h>
