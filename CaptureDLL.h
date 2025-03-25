@@ -5,10 +5,10 @@
 
 struct FrameData {
     std::vector<unsigned char> data;
-	int size;
-    int width;
-    int height;
-    long long timeStamp;
+	int size = 0;
+    int width = 0;
+    int height = 0;
+    long long timeStamp = 0.0;
 };
 
 extern "C" {
