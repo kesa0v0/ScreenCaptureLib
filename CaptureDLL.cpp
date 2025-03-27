@@ -238,4 +238,18 @@ extern "C" __declspec(dllexport) void StopCapture() {
 	if (captureThread.joinable()) {
 		captureThread.join();
 	}
+    // DirectX 자원 해제
+    if (desktopDuplication) {
+        desktopDuplication->Release();
+        desktopDuplication = nullptr;
+    }
+    if (d3dContext) {
+        d3dContext->Release();
+        d3dContext = nullptr;
+    }
+    if (d3dDevice) {
+        d3dDevice->Release();
+        d3dDevice = nullptr;
+    }
 }
+
