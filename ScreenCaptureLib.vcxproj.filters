@@ -24,6 +24,9 @@
     <ClInclude Include="CaptureDLL.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="Log.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -33,6 +36,9 @@
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="CaptureDLL.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="Log.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>

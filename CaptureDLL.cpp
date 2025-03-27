@@ -12,6 +12,8 @@
 #include <timeapi.h>
 #include <windows.h>
 
+#include "Log.h"
+
 #pragma comment(lib, "winmm.lib") // 📌 winmm 라이브러리 링크 추가
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -40,11 +42,6 @@ std::vector<unsigned char> frameBuffer(frameWidth* frameHeight * 4, 0);
 // DLL 로드 테스트 함수
 extern "C" __declspec(dllexport) const char* TestDLL() {
 	return "DLL is successfully loaded!";
-}
-
-// 정밀한 타이머 설정 (Windows 전용)
-void SetHighPrecisionTimer() {
-	timeBeginPeriod(1); // Windows 타이머 해상도를 1ms로 설정 (더 정확한 타이밍 가능)
 }
 
 
@@ -80,9 +77,82 @@ bool InitializeCapture() {
 	// Output Duplication 초기화
 	hr = output1->DuplicateOutput(d3dDevice.Get(), &desktopDuplication);
 	if (FAILED(hr)) {
-		std::cerr << "Failed to initialize output duplication\n";
+		loge("Failed to initialize desktop duplication");
 		return false;
 	}
+
+	return true;
+}
+
+bool AcquireFrame(DXGI_OUTDUPL_FRAME_INFO& frameInfo, ComPtr<IDXGIResource>& desktopResource) {
+	HRESULT hr;
+
+	// 새 프레임 가져오기
+	hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
+	switch (hr) {
+	case DXGI_ERROR_ACCESS_LOST:
+		loge("Access lost");
+		return false;
+	case DXGI_ERROR_WAIT_TIMEOUT:
+		loge("Timeout");
+		return false;
+	case DXGI_ERROR_INVALID_CALL:
+		loge("Invalid call");
+		return false;
+	case S_OK:
+		break;
+	default:
+		loge("Failed to acquire next frame");
+		return false;
+	}
+
+	return true;
+}
+
+bool MapFrameToCPU(ComPtr<IDXGIResource>& desktopResource, ComPtr<ID3D11Texture2D>& acquiredTexture) {
+	HRESULT hr;
+
+	// 2D 텍스처 가져오기
+	desktopResource.As(&acquiredTexture);
+
+	// CPU 접근 가능한 텍스처 생성
+	D3D11_TEXTURE2D_DESC textureDesc;
+	acquiredTexture->GetDesc(&textureDesc);
+	textureDesc.Usage = D3D11_USAGE_STAGING;
+	textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	textureDesc.BindFlags = 0;
+	textureDesc.MiscFlags = 0;
+
+	ComPtr<ID3D11Texture2D> cpuTexture;
+	hr = d3dDevice->CreateTexture2D(&textureDesc, nullptr, &cpuTexture);
+	if (FAILED(hr)) {
+		loge("Failed to create staging texture");
+		desktopDuplication->ReleaseFrame();
+		return false;
+	}
+
+	// GPU -> CPU 복사
+	d3dContext->CopyResource(cpuTexture.Get(), acquiredTexture.Get());
+
+	// 맵핑하여 데이터 가져오기
+	D3D11_MAPPED_SUBRESOURCE mappedResource;
+	hr = d3dContext->Map(cpuTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
+	if (FAILED(hr)) {
+		loge("Failed to map texture");
+		desktopDuplication->ReleaseFrame();
+		return false;
+	}
+
+	// 데이터를 frameBuffer로 복사
+	unsigned char* srcData = static_cast<unsigned char*>(mappedResource.pData);
+	int rowPitch = mappedResource.RowPitch;
+
+	for (int y = 0; y < frameHeight; ++y) {
+		memcpy(&frameBuffer[y * frameWidth * 4], &srcData[y * rowPitch], frameWidth * 4);
+	}
+
+	d3dContext->Unmap(cpuTexture.Get(), 0);
+	desktopDuplication->ReleaseFrame();
 
 	return true;
 }
@@ -91,8 +161,6 @@ bool InitializeCapture() {
 void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 	HRESULT hr;
 	try {
-		SetHighPrecisionTimer();
-
 		while (capturing) {
 			ComPtr<IDXGIResource> desktopResource;
 			DXGI_OUTDUPL_FRAME_INFO frameInfo;
@@ -102,65 +170,14 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 			// 새 프레임 가져오기
-			hr = desktopDuplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
-			switch (hr) {
-			case DXGI_ERROR_ACCESS_LOST:
-				std::cerr << "Access lost\n";
-				continue;	
-			case DXGI_ERROR_WAIT_TIMEOUT:
-				std::cerr << "Timeout\n";
-				continue;
-			case DXGI_ERROR_INVALID_CALL:
-				std::cerr << "Invalid call\n";
-				continue;
-			case S_OK:
-				break;
-			default:
-				std::cerr << "Failed to acquire frame\n";
+			if (!AcquireFrame(frameInfo, desktopResource)) {
 				continue;
 			}
 
-			// 2D 텍스처 가져오기
-			desktopResource.As(&acquiredTexture);
-
-			// CPU 접근 가능한 텍스처 생성
-			D3D11_TEXTURE2D_DESC textureDesc;
-			acquiredTexture->GetDesc(&textureDesc);
-			textureDesc.Usage = D3D11_USAGE_STAGING;
-			textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-			textureDesc.BindFlags = 0;
-			textureDesc.MiscFlags = 0;
-
-			ComPtr<ID3D11Texture2D> cpuTexture;
-			hr = d3dDevice->CreateTexture2D(&textureDesc, nullptr, &cpuTexture);
-			if (FAILED(hr)) {
-				std::cerr << "Failed to create staging texture\n";
-				desktopDuplication->ReleaseFrame();
+			// CPU로 프레임 데이터 복사 
+			if (!MapFrameToCPU(desktopResource, acquiredTexture)) {
 				continue;
 			}
-
-			// GPU -> CPU 복사
-			d3dContext->CopyResource(cpuTexture.Get(), acquiredTexture.Get());
-
-			// 맵핑하여 데이터 가져오기
-			D3D11_MAPPED_SUBRESOURCE mappedResource;
-			hr = d3dContext->Map(cpuTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
-			if (FAILED(hr)) {
-				std::cerr << "Failed to map texture\n";
-				desktopDuplication->ReleaseFrame();
-				continue;
-			}
-
-			// 데이터를 frameBuffer로 복사
-			unsigned char* srcData = static_cast<unsigned char*>(mappedResource.pData);
-			int rowPitch = mappedResource.RowPitch;
-
-			for (int y = 0; y < frameHeight; ++y) {
-				memcpy(&frameBuffer[y * frameWidth * 4], &srcData[y * rowPitch], frameWidth * 4);
-			}
-
-			d3dContext->Unmap(cpuTexture.Get(), 0);
-			desktopDuplication->ReleaseFrame();
 
 
 			// 콜백용 프레임 데이터 생성
@@ -171,7 +188,12 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			frameData.timeStamp = startEpochTime;
 
 			// 콜백 호출 (프레임 데이터 전달)
-			frameCallback(frameData);
+			try {
+				frameCallback(frameData);
+			}
+			catch (std::exception& e) {
+				loge("Failed to call frame callback");
+			}
 
 
 			while (true) {
@@ -182,10 +204,9 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 				}
 			}
 		}
-		timeEndPeriod(1);
 	}
 	catch (std::exception& e) {
-		printf("e");
+		loge("Capture loop exception");
 	}
 }
 
@@ -194,7 +215,7 @@ extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameDa
 	std::lock_guard<std::mutex> lock(captureMutex);
 	if (!capturing) {
 		if (!InitializeCapture()) {
-			std::cerr << "Capture initialization failed!\n";
+			loge("Failed to initialize capture");
 			return;
 		}
 
