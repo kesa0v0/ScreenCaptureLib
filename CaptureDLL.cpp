@@ -215,6 +215,7 @@ extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameDa
 	std::lock_guard<std::mutex> lock(captureMutex);
 	if (!capturing) {
 		if (!InitializeCapture()) {
+			capturing = false;
 			loge("Failed to initialize capture");
 			return;
 		}
@@ -227,10 +228,31 @@ extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameDa
 // 캡처 중지
 extern "C" __declspec(dllexport) void StopCapture() {
 	{
+		log("Stop capture");
 		std::lock_guard<std::mutex> lock(captureMutex);
 		capturing = false;
 	}
+
 	if (captureThread.joinable()) {
-		captureThread.join();
+		try {
+			captureThread.join();
+		}
+		catch (...) {
+			loge("Error while joining captureThread");
+		}
+	}
+
+	// DirectX 자원 해제
+	if (desktopDuplication) {
+		desktopDuplication->Release();
+		desktopDuplication = nullptr;
+	}
+	if (d3dContext) {
+		d3dContext->Release();
+		d3dContext = nullptr;
+	}
+	if (d3dDevice) {
+		d3dDevice->Release();
+		d3dDevice = nullptr;
 	}
 }
