@@ -115,7 +115,7 @@ bool AcquireFrame(ComPtr<ID3D11Texture2D>& acquiredTexture) {
 			return false;
 		}
 		logError("Failed to acquire frame");
-		std::cerr << "Error code: " << hr << std::endl;
+		std::cerr << "Error code: " << std::hex << hr << std::endl;
 		return false;
 	}
 
@@ -135,6 +135,7 @@ bool MapFrameToCPU(ComPtr<ID3D11Texture2D>& acquiredTexture, std::vector<unsigne
 	HRESULT hr = d3dDevice->CreateTexture2D(&textureDesc, nullptr, &cpuTexture);
 	if (FAILED(hr)) {
 		logError("Failed to create staging texture");
+		std::cout << std::hex << hr << std::endl;
 		return false;
 	}
 
