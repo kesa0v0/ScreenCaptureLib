@@ -170,12 +170,14 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 			// 새 프레임 가져오기
-			if (!AcquireFrame(frameInfo, desktopResource)) {
+			log("Acquiring frame");
+			if (!AcquireFrame(frameInfo, desktopResource) && capturing) {
 				continue;
 			}
 
 			// CPU로 프레임 데이터 복사 
-			if (!MapFrameToCPU(desktopResource, acquiredTexture)) {
+			log("Mapping frame to CPU");
+			if (!MapFrameToCPU(desktopResource, acquiredTexture) && capturing) {
 				continue;
 			}
 
@@ -188,14 +190,18 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			frameData.timeStamp = startEpochTime;
 
 			// 콜백 호출 (프레임 데이터 전달)
+			if (!capturing)
+				break;
+
 			try {
+				log("Calling frame callback");
 				frameCallback(frameData);
 			}
 			catch (std::exception& e) {
 				loge("Failed to call frame callback");
 			}
 
-
+			log("Waiting");
 			while (true) {
 				auto now = std::chrono::high_resolution_clock::now();
 				double elapsedTime = std::chrono::duration<double, std::milli>(now - startTime).count();
@@ -227,14 +233,13 @@ extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameDa
 
 // 캡처 중지
 extern "C" __declspec(dllexport) void StopCapture() {
-	{
-		log("Stop capture");
-		std::lock_guard<std::mutex> lock(captureMutex);
-		capturing = false;
-	}
-
+	log("Stop capture");
+	std::lock_guard<std::mutex> lock(captureMutex);
+	capturing = false;
+		
 	if (captureThread.joinable()) {
 		try {
+			log("Joining captureThread");
 			captureThread.join();
 		}
 		catch (...) {
@@ -244,15 +249,19 @@ extern "C" __declspec(dllexport) void StopCapture() {
 
 	// DirectX 자원 해제
 	if (desktopDuplication) {
+		log("Releasing desktopDuplication");
 		desktopDuplication->Release();
 		desktopDuplication = nullptr;
 	}
 	if (d3dContext) {
+		log("Releasing d3dContext");
 		d3dContext->Release();
 		d3dContext = nullptr;
 	}
 	if (d3dDevice) {
+		log("Releasing d3dDevice");
 		d3dDevice->Release();
 		d3dDevice = nullptr;
 	}
+	log("Capture stopped");
 }
