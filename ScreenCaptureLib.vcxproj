@@ -157,13 +157,13 @@ xcopy /Y /I "$(TargetDir)\ScreenCaptureLib.pdb" "$(SolutionDir)bin\Debug\net9.0-
     <ClInclude Include="CaptureDLL.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Log.h" />
-    <ClInclude Include="pch.h" />
+    <ClInclude Include="lz4\lz4.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CaptureDLL.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Log.cpp" />
-    <ClCompile Include="pch.cpp">
+    <ClCompile Include="lz4\lz4.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

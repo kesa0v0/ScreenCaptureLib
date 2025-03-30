@@ -1,4 +1,4 @@
-#include "CaptureDLL.h"
+﻿#include "CaptureDLL.h"
 #include <windows.graphics.capture.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include "Log.h"
+#include "lz4/lz4.h"
 
 #pragma comment(lib, "winmm.lib") // 📌 winmm 라이브러리 링크 추가
 #pragma comment(lib, "d3d11.lib")
