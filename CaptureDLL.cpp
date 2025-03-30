@@ -1,4 +1,3 @@
-﻿#include "pch.h"
 #include "CaptureDLL.h"
 #include <windows.graphics.capture.h>
 #include <d3d11.h>
@@ -170,13 +169,11 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 			// 새 프레임 가져오기
-			log("Acquiring frame");
 			if (!AcquireFrame(frameInfo, desktopResource) && capturing) {
 				continue;
 			}
 
 			// CPU로 프레임 데이터 복사 
-			log("Mapping frame to CPU");
 			if (!MapFrameToCPU(desktopResource, acquiredTexture) && capturing) {
 				continue;
 			}
@@ -194,7 +191,6 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 				break;
 
 			try {
-				log("Calling frame callback");
 				frameCallback(frameData);
 			}
 			catch (std::exception& e) {
