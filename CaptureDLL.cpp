@@ -32,11 +32,13 @@ ComPtr<ID3D11DeviceContext> d3dContext;
 ComPtr<IDXGIOutputDuplication> desktopDuplication;
 
 // 해상도 및 프레임버퍼
-int frameWidth = 1920;
-int frameHeight = 1080;
-int targetFPS = 60;
-double frameTime = 1000 / targetFPS;
-std::vector<unsigned char> frameBuffer(frameWidth* frameHeight * 4, 0);
+int _frameWidth = 1920;
+int _frameHeight = 1080;
+int FRAME_SIZE = _frameWidth * _frameHeight * 4;
+int _targetFPS = 60;
+double frameTime = 1000 / _targetFPS;
+std::vector<unsigned char> previousFrameBuffer(_frameWidth* _frameHeight * 4, 0); // 이전 프레임 버퍼
+std::vector<unsigned char> frameBuffer(_frameWidth* _frameHeight * 4, 0); // 압축 버퍼
 
 
 // DLL 로드 테스트 함수
@@ -147,14 +149,38 @@ bool MapFrameToCPU(ComPtr<IDXGIResource>& desktopResource, ComPtr<ID3D11Texture2
 	unsigned char* srcData = static_cast<unsigned char*>(mappedResource.pData);
 	int rowPitch = mappedResource.RowPitch;
 
-	for (int y = 0; y < frameHeight; ++y) {
-		memcpy(&frameBuffer[y * frameWidth * 4], &srcData[y * rowPitch], frameWidth * 4);
+	for (int y = 0; y < _frameHeight; ++y) {
+		memcpy(&frameBuffer[y * _frameWidth * 4], &srcData[y * rowPitch], _frameWidth * 4);
 	}
 
 	d3dContext->Unmap(cpuTexture.Get(), 0);
 	desktopDuplication->ReleaseFrame();
 
 	return true;
+}
+
+void compressFrame(const uint8_t* currentFrame, const uint8_t* previousFrame, std::vector<char>& compressedData) {
+	std::vector<uint8_t> diffBuffer(_frameWidth * _frameHeight * 4, 0);
+
+	// 변경된 부분 계산
+	for (int i = 0; i < FRAME_SIZE; ++i) {
+		diffBuffer[i] = currentFrame[i] ^ previousFrame[i]; // XOR 연산으로 차이 계산
+	}
+
+	// LZ4 압축
+	int maxCompressedSize = LZ4_compressBound(FRAME_SIZE);
+	compressedData.resize(maxCompressedSize);
+	int compressedSize = LZ4_compress_default(reinterpret_cast<const char*>(diffBuffer.data()),
+		compressedData.data(),
+		FRAME_SIZE,
+		maxCompressedSize);
+
+	if (compressedSize > 0) {
+		compressedData.resize(compressedSize); // 실제 크기로 축소
+	}
+	else {
+		std::cerr << "Compression failed!" << std::endl;
+	}
 }
 
 // 캡처 루프
@@ -179,12 +205,18 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 				continue;
 			}
 
+			// 프레임 압축
+			std::vector<char> compressedData;
+			compressFrame(frameBuffer.data(), previousFrameBuffer.data(), compressedData);
 
 			// 콜백용 프레임 데이터 생성
 			FrameData frameData;
 			frameData.data = frameBuffer.data();
-			frameData.width = frameWidth;
-			frameData.height = frameHeight;
+			frameData.width = _frameWidth;
+			frameData.height = _frameHeight;
+			frameData.frameRate = _targetFPS;
+
+			frameData.dataSize = compressedData.size();
 			frameData.timeStamp = startEpochTime;
 
 			// 콜백 호출 (프레임 데이터 전달)
@@ -198,7 +230,6 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 				loge("Failed to call frame callback");
 			}
 
-			log("Waiting");
 			while (true) {
 				auto now = std::chrono::high_resolution_clock::now();
 				double elapsedTime = std::chrono::duration<double, std::milli>(now - startTime).count();
@@ -214,7 +245,12 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 }
 
 // 캡처 시작
-extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameData frameData)) {
+extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameData frameData), int frameWidth, int frameHeight, int frameRate) {
+	_frameWidth = frameWidth;
+	_frameHeight = frameHeight;
+	FRAME_SIZE = _frameWidth * _frameHeight * 4;
+	_targetFPS = frameRate;
+
 	std::lock_guard<std::mutex> lock(captureMutex);
 	if (!capturing) {
 		if (!InitializeCapture()) {
