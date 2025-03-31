@@ -10,6 +10,10 @@
 #include <chrono>
 #include <timeapi.h>
 #include <windows.h>
+#include <immintrin.h>
+#include <queue>
+#include <condition_variable>
+#include <functional>
 
 #include "Log.h"
 #include "lz4/lz4.h"
@@ -46,6 +50,56 @@ extern "C" __declspec(dllexport) const char* TestDLL() {
 	return "DLL is successfully loaded!";
 }
 
+// 쓰레드 풀 클래스 정의
+class ThreadPool {
+private:
+	std::vector<std::thread> workers;
+	std::queue<std::function<void()>> tasks;
+	std::mutex queueMutex;
+	std::condition_variable condition;
+	bool stop;
+
+public:
+	explicit ThreadPool(size_t threadCount) : stop(false) {
+		for (size_t i = 0; i < threadCount; ++i) {
+			workers.emplace_back([this] {
+				while (true) {
+					std::function<void()> task;
+					{
+						std::unique_lock<std::mutex> lock(queueMutex);
+						condition.wait(lock, [this] { return stop || !tasks.empty(); });
+						if (stop && tasks.empty()) return;
+						task = std::move(tasks.front());
+						tasks.pop();
+					}
+					task();
+				}
+				});
+		}
+	}
+
+	~ThreadPool() {
+		{
+			std::unique_lock<std::mutex> lock(queueMutex);
+			stop = true;
+		}
+		condition.notify_all();
+		for (std::thread& worker : workers) {
+			worker.join();
+		}
+	}
+
+	void enqueueTask(std::function<void()> task) {
+		{
+			std::unique_lock<std::mutex> lock(queueMutex);
+			tasks.push(std::move(task));
+		}
+		condition.notify_one();
+	}
+};
+
+// 전역 쓰레드 풀 인스턴스
+ThreadPool pool(std::thread::hardware_concurrency()); // CPU 코어 수만큼 쓰레드 생성
 
 // DirectX 11 초기화 함수
 bool InitializeCapture() {
@@ -82,6 +136,12 @@ bool InitializeCapture() {
 		loge("Failed to initialize desktop duplication");
 		return false;
 	}
+
+	// 모든 픽셀을 0으로 초기화
+	previousFrameBuffer.resize(FRAME_SIZE);
+	std::fill(previousFrameBuffer.begin(), previousFrameBuffer.end(), 0);
+	frameBuffer.resize(FRAME_SIZE);
+	std::fill(frameBuffer.begin(), frameBuffer.end(), 0); 
 
 	return true;
 }
@@ -159,21 +219,37 @@ bool MapFrameToCPU(ComPtr<IDXGIResource>& desktopResource, ComPtr<ID3D11Texture2
 	return true;
 }
 
-void compressFrame(const uint8_t* currentFrame, const uint8_t* previousFrame, std::vector<char>& compressedData) {
-	std::vector<uint8_t> diffBuffer(_frameWidth * _frameHeight * 4, 0);
+void calculateDiffSIMD(const uint8_t* currentFrame, const uint8_t* previousFrame, uint8_t* diffBuffer, size_t frameSize) {
+	size_t i = 0;
 
-	// 변경된 부분 계산
-	for (int i = 0; i < FRAME_SIZE; ++i) {
-		diffBuffer[i] = currentFrame[i] ^ previousFrame[i]; // XOR 연산으로 차이 계산
+	for (; i + 16 <= frameSize; i += 16) { // 16바이트씩 처리
+		__m128i curr = _mm_loadu_si128(reinterpret_cast<const __m128i*>(currentFrame + i));
+		__m128i prev = _mm_loadu_si128(reinterpret_cast<const __m128i*>(previousFrame + i));
+		__m128i diff = _mm_xor_si128(curr, prev);
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(diffBuffer + i), diff);
 	}
 
+	// 남은 부분 처리 (16바이트 단위 미만)
+	for (; i < frameSize; ++i) {
+		diffBuffer[i] = currentFrame[i] ^ previousFrame[i];
+	}
+}
+
+void compressFrame(const uint8_t* currentFrame, const uint8_t* previousFrame, std::vector<unsigned char>& compressedData) {
+	std::vector<unsigned char> diffBuffer(_frameWidth * _frameHeight * 4, 0);
+
+	// 변경된 부분 계산
+	calculateDiffSIMD(currentFrame, previousFrame, diffBuffer.data(), FRAME_SIZE);
+
 	// LZ4 압축
-	int maxCompressedSize = LZ4_compressBound(FRAME_SIZE);
+	int maxCompressedSize = LZ4_compressBound(diffBuffer.size());
 	compressedData.resize(maxCompressedSize);
-	int compressedSize = LZ4_compress_default(reinterpret_cast<const char*>(diffBuffer.data()),
-		compressedData.data(),
-		FRAME_SIZE,
-		maxCompressedSize);
+	int compressedSize = LZ4_compress_fast(
+		reinterpret_cast<const char*>(diffBuffer.data()), // unsigned char*를 const char*로 변환
+		reinterpret_cast<char*>(compressedData.data()),
+		diffBuffer.size(),
+		maxCompressedSize,
+		1);
 
 	if (compressedSize > 0) {
 		compressedData.resize(compressedSize); // 실제 크기로 축소
@@ -206,12 +282,12 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 			}
 
 			// 프레임 압축
-			std::vector<char> compressedData;
+			std::vector<unsigned char> compressedData;
 			compressFrame(frameBuffer.data(), previousFrameBuffer.data(), compressedData);
 
 			// 콜백용 프레임 데이터 생성
 			FrameData frameData;
-			frameData.data = frameBuffer.data();
+			frameData.data = compressedData.data();
 			frameData.width = _frameWidth;
 			frameData.height = _frameHeight;
 			frameData.frameRate = _targetFPS;
