@@ -25,6 +25,8 @@
 using namespace Microsoft::WRL;
 
 
+#define NOFRAMECHANGE 1557
+
 // 전역 변수
 bool capturing = false;
 std::thread captureThread;
@@ -141,12 +143,12 @@ bool InitializeCapture() {
 	previousFrameBuffer.resize(FRAME_SIZE);
 	std::fill(previousFrameBuffer.begin(), previousFrameBuffer.end(), 0);
 	frameBuffer.resize(FRAME_SIZE);
-	std::fill(frameBuffer.begin(), frameBuffer.end(), 0); 
+	std::fill(frameBuffer.begin(), frameBuffer.end(), 0);
 
 	return true;
 }
 
-bool AcquireFrame(DXGI_OUTDUPL_FRAME_INFO& frameInfo, ComPtr<IDXGIResource>& desktopResource) {
+int AcquireFrame(DXGI_OUTDUPL_FRAME_INFO& frameInfo, ComPtr<IDXGIResource>& desktopResource) {
 	HRESULT hr;
 
 	// 새 프레임 가져오기
@@ -156,8 +158,8 @@ bool AcquireFrame(DXGI_OUTDUPL_FRAME_INFO& frameInfo, ComPtr<IDXGIResource>& des
 		loge("Access lost");
 		return false;
 	case DXGI_ERROR_WAIT_TIMEOUT:
-		loge("Timeout");
-		return false;
+		log("timeout");
+		return NOFRAMECHANGE;
 	case DXGI_ERROR_INVALID_CALL:
 		loge("Invalid call");
 		return false;
@@ -235,11 +237,14 @@ void calculateDiffSIMD(const uint8_t* currentFrame, const uint8_t* previousFrame
 	}
 }
 
+long long _startTime = 0;
+
 void compressFrame(const uint8_t* currentFrame, const uint8_t* previousFrame, std::vector<unsigned char>& compressedData) {
 	std::vector<unsigned char> diffBuffer(_frameWidth * _frameHeight * 4, 0);
 
 	// 변경된 부분 계산
 	calculateDiffSIMD(currentFrame, previousFrame, diffBuffer.data(), FRAME_SIZE);
+	logd("CalculateDiff", _startTime);
 
 	// LZ4 압축
 	int maxCompressedSize = LZ4_compressBound(diffBuffer.size());
@@ -249,7 +254,9 @@ void compressFrame(const uint8_t* currentFrame, const uint8_t* previousFrame, st
 		reinterpret_cast<char*>(compressedData.data()),
 		diffBuffer.size(),
 		maxCompressedSize,
-		1);
+		10000);
+
+	logd("LZ4Compress", _startTime);
 
 	if (compressedSize > 0) {
 		compressedData.resize(compressedSize); // 실제 크기로 축소
@@ -262,49 +269,68 @@ void compressFrame(const uint8_t* currentFrame, const uint8_t* previousFrame, st
 // 캡처 루프
 void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 	HRESULT hr;
+	int result;
 	try {
 		while (capturing) {
 			ComPtr<IDXGIResource> desktopResource;
 			DXGI_OUTDUPL_FRAME_INFO frameInfo;
 			ComPtr<ID3D11Texture2D> acquiredTexture;
 
+			log("NEW FRAME");
+
 			auto startTime = std::chrono::high_resolution_clock::now();
 			auto startEpochTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+			_startTime = startEpochTime;
 
 			// 새 프레임 가져오기
-			if (!AcquireFrame(frameInfo, desktopResource) && capturing) {
+			result = AcquireFrame(frameInfo, desktopResource);
+			if (result == 0 || !capturing)
+			{
 				continue;
 			}
+			logd("AcquireFrame", startEpochTime);
 
 			// CPU로 프레임 데이터 복사 
-			if (!MapFrameToCPU(desktopResource, acquiredTexture) && capturing) {
-				continue;
+			if (result != NOFRAMECHANGE) {
+				if (!MapFrameToCPU(desktopResource, acquiredTexture) || !capturing) {
+					continue;
+				}
+				logd("MapFrameToCPU", startEpochTime);
+			}
+			else if (result == NOFRAMECHANGE)
+			{
+				frameBuffer = previousFrameBuffer;
+				logd("No Frame Change", startEpochTime);
 			}
 
-			// 프레임 압축
-			std::vector<unsigned char> compressedData;
-			compressFrame(frameBuffer.data(), previousFrameBuffer.data(), compressedData);
 
-			// 콜백용 프레임 데이터 생성
-			FrameData frameData;
-			frameData.data = compressedData.data();
-			frameData.width = _frameWidth;
-			frameData.height = _frameHeight;
-			frameData.frameRate = _targetFPS;
+			pool.enqueueTask([=]() {
+				// 프레임 압축
+				std::vector<unsigned char> compressedData;
+				compressFrame(frameBuffer.data(), previousFrameBuffer.data(), compressedData);
+				log("Compressed frame size: " + std::to_string(compressedData.size()) + "/" + std::to_string(frameBuffer.size()));
+				logd("CompressFrame", startEpochTime);
 
-			frameData.dataSize = compressedData.size();
-			frameData.timeStamp = startEpochTime;
+				// 콜백용 프레임 데이터 생성
+				FrameData frameData;
+				frameData.data = compressedData.data();
+				frameData.width = _frameWidth;
+				frameData.height = _frameHeight;
+				frameData.frameRate = _targetFPS;
 
-			// 콜백 호출 (프레임 데이터 전달)
-			if (!capturing)
-				break;
+				frameData.dataSize = compressedData.size();
+				frameData.timeStamp = startEpochTime;
 
-			try {
-				frameCallback(frameData);
-			}
-			catch (std::exception& e) {
-				loge("Failed to call frame callback");
-			}
+				try {
+					frameCallback(frameData);
+				}
+				catch (std::exception& e) {
+					loge("Failed to call frame callback");
+				}
+				});
+			
+			// 이전 프레임 버퍼 업데이트
+			previousFrameBuffer = frameBuffer;
 
 			while (true) {
 				auto now = std::chrono::high_resolution_clock::now();
@@ -326,6 +352,7 @@ extern "C" __declspec(dllexport) void StartCapture(void (*frameCallback)(FrameDa
 	_frameHeight = frameHeight;
 	FRAME_SIZE = _frameWidth * _frameHeight * 4;
 	_targetFPS = frameRate;
+	frameTime = 1000.0 / _targetFPS;
 
 	std::lock_guard<std::mutex> lock(captureMutex);
 	if (!capturing) {
@@ -345,7 +372,7 @@ extern "C" __declspec(dllexport) void StopCapture() {
 	log("Stop capture");
 	std::lock_guard<std::mutex> lock(captureMutex);
 	capturing = false;
-		
+
 	if (captureThread.joinable()) {
 		try {
 			log("Joining captureThread");

@@ -27,3 +27,15 @@ void log(const std::string& message) {
 	// 콘솔 출력
 	std::cout << logMessage << std::endl;
 }
+
+void logd(const std::string& message, long long startTime) {
+	// 현재 시간을 가져오기
+	auto currTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	
+	// 경과 시간 계산	
+	long long elapsedTime = currTime - startTime;
+	// 로그 메시지 생성
+	std::string logMessage = std::format("[{}] DEBUG: {} ({}ms)", currTime, message, elapsedTime);
+	// 콘솔 출력
+	std::cout << logMessage << std::endl;
+}
