@@ -116,7 +116,7 @@ bool InitializeCapture() {
 	);
 
 	if (FAILED(hr)) {
-		logError("Failed to create D3D11 device");
+		loge("Failed to create D3D11 device");
 		return false;
 	}
 
@@ -273,6 +273,9 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 	int result;
 	try {
 		while (capturing) {
+
+			ComPtr<IDXGIResource> desktopResource;
+			DXGI_OUTDUPL_FRAME_INFO frameInfo;
 			ComPtr<ID3D11Texture2D> acquiredTexture;
 
 			log("NEW FRAME");
