@@ -4,15 +4,17 @@
 #include <vector> 
 
 struct FrameData {
-    std::vector<unsigned char> data;
-	int size = 0;
-    int width = 0;
-    int height = 0;
-    long long timeStamp = 0.0;
+    unsigned char* data;
+    int width;
+    int height;
+    int frameRate;
+    
+    int dataSize;
+    long long timeStamp;
 };
 
 extern "C" {
     CAPTUREDLL_API const char* TestDLL();
-    CAPTUREDLL_API void StartCapture(void (*frameCallback)(FrameData frameData));
+    CAPTUREDLL_API void StartCapture(void (*frameCallback)(FrameData frameData), int frameWidth, int frameHeight, int frameRate);
     CAPTUREDLL_API void StopCapture();
 }

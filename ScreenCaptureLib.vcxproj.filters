@@ -18,10 +18,13 @@
     <ClInclude Include="framework.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-    <ClInclude Include="pch.h">
+    <ClInclude Include="CaptureDLL.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-    <ClInclude Include="CaptureDLL.h">
+    <ClInclude Include="Log.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="lz4\lz4.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="lz4\lz4.h">
@@ -32,10 +35,13 @@
     <ClCompile Include="dllmain.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="pch.cpp">
+    <ClCompile Include="CaptureDLL.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="CaptureDLL.cpp">
+    <ClCompile Include="Log.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="lz4\lz4.c">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="lz4\lz4.c">

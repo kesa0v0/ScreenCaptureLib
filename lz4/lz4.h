@@ -42,7 +42,6 @@ extern "C" {
 /* --- Dependency --- */
 #include <stddef.h>   /* size_t */
 
-
 /**
   Introduction
 
