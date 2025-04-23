@@ -308,19 +308,21 @@ void CaptureLoop(void (*frameCallback)(FrameData frameData)) {
 
 			pool.enqueueTask([=]() {
 				// 프레임 압축
-				std::vector<unsigned char> compressedData;
-				compressFrame(frameBuffer.data(), previousFrameBuffer.data(), compressedData);
-				log("Compressed frame size: " + std::to_string(compressedData.size()) + "/" + std::to_string(frameBuffer.size()));
-				logd("CompressFrame", startEpochTime);
+				//std::vector<unsigned char> compressedData;
+				//compressFrame(frameBuffer.data(), previousFrameBuffer.data(), compressedData);
+				//log("Compressed frame size: " + std::to_string(compressedData.size()) + "/" + std::to_string(frameBuffer.size()));
+				//logd("CompressFrame", startEpochTime);
 
 				// 콜백용 프레임 데이터 생성
 				FrameData frameData;
-				frameData.data = compressedData.data();
+				//frameData.data = compressedData.data();
+				frameData.data = frameBuffer.data();
 				frameData.width = _frameWidth;
 				frameData.height = _frameHeight;
 				frameData.frameRate = _targetFPS;
 
-				frameData.dataSize = compressedData.size();
+				//frameData.dataSize = compressedData.size();
+				frameData.dataSize = frameBuffer.size();
 				frameData.timeStamp = startEpochTime;
 
 				try {
