@@ -53,53 +53,6 @@ extern "C" __declspec(dllexport) const char* TestDLL() {
 	return "DLL is successfully loaded!";
 }
 
-// 쓰레드 풀 클래스 정의
-class ThreadPool {
-private:
-	std::vector<std::thread> workers;
-	std::queue<std::function<void()>> tasks;
-	std::mutex queueMutex;
-	std::condition_variable condition;
-	bool stop;
-
-public:
-	explicit ThreadPool(size_t threadCount) : stop(false) {
-		for (size_t i = 0; i < threadCount; ++i) {
-			workers.emplace_back([this] {
-				while (true) {
-					std::function<void()> task;
-					{
-						std::unique_lock<std::mutex> lock(queueMutex);
-						condition.wait(lock, [this] { return stop || !tasks.empty(); });
-						if (stop && tasks.empty()) return;
-						task = std::move(tasks.front());
-						tasks.pop();
-					}
-					task();
-				}
-				});
-		}
-	}
-
-	~ThreadPool() {
-		{
-			std::unique_lock<std::mutex> lock(queueMutex);
-			stop = true;
-		}
-		condition.notify_all();
-		for (std::thread& worker : workers) {
-			worker.join();
-		}
-	}
-
-	void enqueueTask(std::function<void()> task) {
-		{
-			std::unique_lock<std::mutex> lock(queueMutex);
-			tasks.push(std::move(task));
-		}
-		condition.notify_one();
-	}
-};
 
 // 전역 쓰레드 풀 인스턴스
 ThreadPool pool(std::thread::hardware_concurrency()); // CPU 코어 수만큼 쓰레드 생성

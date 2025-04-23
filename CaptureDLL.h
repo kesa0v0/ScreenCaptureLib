@@ -3,15 +3,8 @@
 #define CAPTUREDLL_API __declspec(dllexport)
 #include <vector> 
 
-struct FrameData {
-    unsigned char* data;
-    int width;
-    int height;
-    int frameRate;
-    
-    int dataSize;
-    long long timeStamp;
-};
+#include "ThreadPool.h"
+#include "FrameData.h"
 
 extern "C" {
     CAPTUREDLL_API const char* TestDLL();
